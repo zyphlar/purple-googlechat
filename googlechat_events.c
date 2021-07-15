@@ -328,8 +328,36 @@ googlechat_received_message_event(PurpleConnection *pc, Event *event)
 	}
 	PurpleConversation *pconv = NULL;
 	
-	//TODO process Annotations to add formatting
-	gchar *msg = g_strdup(message->text_body);
+	GString *body_str = g_string_new(message->text_body);
+
+	// pre-processing of annotations to add formatting
+	// TODO: consider merging with annotation post-processing so we're not always inserting two messages for images
+	// TODO: also consider processing sorted in reverse order to avoid mangling start_indexes as we go
+	int ann_offset = 0;
+	for (i = 0; i < message->n_annotations; i++) {
+		Annotation *annotation = message->annotations[i];
+		
+		// process inline text link url metadata
+		if (annotation->url_metadata && annotation->start_index && annotation->length) {
+			UrlMetadata *url_metadata = annotation->url_metadata;
+			
+			if (url_metadata->url && url_metadata->url->url) {
+				// the way google sends us an inline url is with an address, an index to start, and a length
+				GString *link_str = g_string_new(NULL);
+				g_string_append_printf(link_str, "<a href=\"%s\">", url_metadata->url->url);
+				g_string_insert(body_str, annotation->start_index+ann_offset, link_str->str);
+				ann_offset += strlen(link_str->str); // we have to track how much text we've inserted
+				g_string_free(link_str, FALSE);
+				
+				g_string_insert(body_str, annotation->start_index+ann_offset+annotation->length, "</a>");
+				ann_offset += strlen("</a>"); // we have to track how much text we've inserted
+			}
+		}
+	}
+
+	// begin writing out message
+	gchar *msg = body_str->str;
+	g_string_free(body_str, FALSE);
 	
 	if (!is_dm) {
 		PurpleChatConversation *chatconv = purple_conversations_find_chat_with_account(conv_id, ha->account);
@@ -424,10 +452,10 @@ googlechat_received_message_event(PurpleConnection *pc, Event *event)
 		if (annotation->url_metadata) {
 			UrlMetadata *url_metadata = annotation->url_metadata;
 			
+			// image url metadata
 			if (url_metadata->image_url) {
 				image_url = g_strdup(url_metadata->image_url);
 				url = url_metadata->url ? url_metadata->url->url : url_metadata->image_url;
-				
 			}
 		}
 		
